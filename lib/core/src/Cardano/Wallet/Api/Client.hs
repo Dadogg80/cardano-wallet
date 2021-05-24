@@ -173,7 +173,7 @@ data TransactionClient = TransactionClient
         -> PostTransactionFeeOldDataT Aeson.Value
         -> ClientM ApiFee
     , postExternalTransaction
-        :: ApiBytesT Base64 SerialisedTx
+        :: ApiBytesT 'Base64 SerialisedTx
         -> ClientM ApiTxId
     , deleteTransaction
         :: ApiT WalletId
