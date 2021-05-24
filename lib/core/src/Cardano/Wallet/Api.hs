@@ -138,6 +138,9 @@ module Cardano.Wallet.Api
     , Proxy_
         , PostExternalTransaction
 
+    , Tokens
+      , MintToken
+
       -- * Api Layer
     , ApiLayer (..)
     , HasWorkerRegistry
@@ -197,6 +200,7 @@ import Cardano.Wallet.Api.Types
     , Iso8601Time
     , KeyFormat
     , MinWithdrawal
+    , MintTokenDataT
     , PostExternalTransactionData
     , PostTransactionDataT
     , PostTransactionFeeDataT
@@ -300,6 +304,7 @@ type Api n apiPool =
     :<|> SharedWallets
     :<|> SharedWalletKeys
     :<|> SharedAddresses n
+    :<|> Tokens n
 
 {-------------------------------------------------------------------------------
                                   Wallets
@@ -942,7 +947,7 @@ type DeleteSharedWallet = "shared-wallets"
     :> DeleteNoContent
 
 {-------------------------------------------------------------------------------
-                                  Shared Wallet Keys
+                                 Shared Wallet Keys
   See also: https://input-output-hk.github.io/cardano-wallet/api/#tag/Keys
 -------------------------------------------------------------------------------}
 
@@ -990,6 +995,20 @@ type ListSharedAddresses n = "shared-wallets"
     :> "addresses"
     :> QueryParam "state" (ApiT AddressState)
     :> Get '[JSON] [ApiAddressT n]
+
+{-------------------------------------------------------------------------------
+                                  Tokens
+
+  See also: https://input-output-hk.github.io/cardano-wallet/api/edge/#tag/Mint
+-------------------------------------------------------------------------------}
+
+type Tokens n = MintToken n
+
+type MintToken n = "wallets"
+    :> Capture "walletId" (ApiT WalletId)
+    :> "mint"
+    :> ReqBody '[JSON] (MintTokenDataT n)
+    :> PostAccepted '[JSON] (ApiTransactionT n)
 
 {-------------------------------------------------------------------------------
                                    Proxy_

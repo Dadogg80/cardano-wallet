@@ -83,6 +83,8 @@ import Cardano.Wallet.Api.Types
     , ApiHealthCheck (..)
     , ApiMaintenanceAction (..)
     , ApiMaintenanceActionPostData (..)
+    , ApiMintBurnData (..)
+    , ApiMintBurnOperation (..)
     , ApiMnemonicT (..)
     , ApiNetworkClock (..)
     , ApiNetworkInformation (..)
@@ -146,6 +148,7 @@ import Cardano.Wallet.Api.Types
     , HealthCheckSMASH (..)
     , Iso8601Time (..)
     , KeyFormat (..)
+    , MintTokenData (..)
     , NtpSyncingStatus (..)
     , PostExternalTransactionData (..)
     , PostTransactionData (..)
@@ -171,6 +174,7 @@ import Cardano.Wallet.Gen
     , shrinkPercentage
     , shrinkTxMetadata
     )
+
 import Cardano.Wallet.Primitive.AddressDerivation
     ( DerivationIndex (..)
     , DerivationType (..)
@@ -240,6 +244,8 @@ import Cardano.Wallet.Primitive.Types.TokenPolicy
     , TokenFingerprint
     , mkTokenFingerprint
     )
+import Cardano.Wallet.Primitive.Types.TokenPolicy.Gen
+    ( genTokenNameSmallRange )
 import Cardano.Wallet.Primitive.Types.Tx
     ( Direction (..), TxIn (..), TxMetadata (..), TxOut (..), TxStatus (..) )
 import Cardano.Wallet.Primitive.Types.UTxO
@@ -487,6 +493,7 @@ spec = parallel $ do
             jsonRoundtripAndGolden $ Proxy @(ApiOurStakeKey ('Testnet 0))
             jsonRoundtripAndGolden $ Proxy @(ApiForeignStakeKey ('Testnet 0))
             jsonRoundtripAndGolden $ Proxy @ApiNullStakeKey
+            jsonRoundtripAndGolden $ Proxy @(MintTokenData ('Testnet 0))
 
     describe "Textual encoding" $ do
         describe "Can perform roundtrip textual encoding & decoding" $ do
@@ -969,6 +976,16 @@ spec = parallel $ do
                     }
             in
                 x' === x .&&. show x' === show x
+        it "MintTokenData" $ property $ \x ->
+          let
+            x' = MintTokenData
+                 { mintBurn = mintBurn (x :: MintTokenData ('Testnet 0))
+                 , passphrase = passphrase (x :: MintTokenData ('Testnet 0))
+                 , metadata = metadata (x :: MintTokenData ('Testnet 0))
+                 , timeToLive = timeToLive (x :: MintTokenData ('Testnet 0))
+                 }
+          in
+               x' === x .&&. show x' === show x
         it "PostTransactionFeeData" $ property $ \x ->
             let
                 x' = PostTransactionFeeData
@@ -1318,6 +1335,11 @@ instance Arbitrary Address where
     arbitrary = pure $ Address "<addr>"
 
 instance Arbitrary (Quantity "lovelace" Natural) where
+    shrink (Quantity 0) = []
+    shrink _ = [Quantity 0]
+    arbitrary = Quantity . fromIntegral <$> (arbitrary @Word8)
+
+instance Arbitrary (Quantity "token-unit" Natural) where
     shrink (Quantity 0) = []
     shrink _ = [Quantity 0]
     arbitrary = Quantity . fromIntegral <$> (arbitrary @Word8)
@@ -1855,6 +1877,27 @@ instance Arbitrary (PostTransactionData t) where
         <*> arbitrary
         <*> arbitrary
 
+instance Arbitrary (MintTokenData t) where
+    arbitrary = applyArbitrary4 MintTokenData
+
+instance Arbitrary (ApiMintBurnData t) where
+    arbitrary = ApiMintBurnData
+        <$> arbitrary
+        <*> (ApiT <$> genTokenNameSmallRange)
+        <*> arbitrary
+
+instance Arbitrary (ApiMintBurnOperation t) where
+    arbitrary
+        = oneof [ ApiMint <$> arbitrary
+                , ApiBurn <$> arbitrary
+                , ApiMintBurn <$> arbitrary <*> arbitrary
+                ]
+
+instance Arbitrary (Quantity "assets" Natural) where
+    shrink (Quantity 0) = []
+    shrink _ = [Quantity 0]
+    arbitrary = Quantity . fromIntegral <$> (arbitrary @Word8)
+
 instance Arbitrary ApiWithdrawalPostData where
     arbitrary = genericArbitrary
     shrink = genericShrink
@@ -2268,6 +2311,10 @@ instance ToSchema (PostTransactionData t) where
     declareNamedSchema _ = do
         addDefinition =<< declareSchemaForDefinition "TransactionMetadataValue"
         declareSchemaForDefinition "ApiPostTransactionData"
+
+instance ToSchema (MintTokenData t) where
+    declareNamedSchema _ = do
+        declareSchemaForDefinition "ApiMintTokenData"
 
 instance ToSchema (PostTransactionFeeData t) where
     declareNamedSchema _ = do

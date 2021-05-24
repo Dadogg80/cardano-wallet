@@ -34,6 +34,7 @@ module Cardano.Wallet.Primitive.CoinSelection.MA.RoundRobin
     , SelectionResult (..)
     , SelectionError (..)
     , BalanceInsufficientError (..)
+    , OutputsInsufficientError (..)
     , SelectionInsufficientError (..)
     , InsufficientMinCoinValueError (..)
     , UnableToConstructChangeError (..)
@@ -89,6 +90,7 @@ module Cardano.Wallet.Primitive.CoinSelection.MA.RoundRobin
     , distance
     , mapMaybe
     , balanceMissing
+    , outputsMissing
     ) where
 
 import Prelude
@@ -135,6 +137,9 @@ import Data.Ord
     ( comparing )
 import Data.Set
     ( Set )
+import qualified Debug.Trace as Debug
+import Fmt
+    ( pretty )
 import Fmt
     ( Buildable (..), genericF, nameF, unlinesF )
 import GHC.Generics
@@ -175,6 +180,13 @@ data SelectionCriteria = SelectionCriteria
     , extraCoinSource
         :: !(Maybe Coin)
         -- ^ An optional extra source of ada.
+    , mintInputs
+        :: !TokenMap
+        -- ^ When a token is minted, it provides an extra source of tokens.
+    , burnInputs
+        :: !TokenMap
+        -- ^ When a token is burned, the selection algorithm must find
+        -- inputs to satisfy the burn.
     }
     deriving (Eq, Show)
 
@@ -274,9 +286,36 @@ data SelectionError
         SelectionInsufficientError
     | InsufficientMinCoinValues
         (NonEmpty InsufficientMinCoinValueError)
+    | OutputsInsufficient
+        OutputsInsufficientError
     | UnableToConstructChange
         UnableToConstructChangeError
     deriving (Generic, Eq, Show)
+
+-- | Indicates that minted value is not `leq` to the value of the
+-- requested outputs, plus the burned value. That is, the minted value
+-- is not spent or burnt.
+data OutputsInsufficientError = OutputsInsufficientError
+    { mintInputs
+        :: !TokenMap
+      -- ^ The values to mint
+    , burnInputs
+        :: !TokenMap
+      -- ^ The values to burn
+    , requestedOutputs
+        :: !TokenBundle
+      -- ^ The outputs the requester asked to be covered
+    } deriving (Generic, Eq, Show)
+
+-- | Calculate the minted values not present in the burns or outputs
+-- from a @OutputsInsufficientError@.
+outputsMissing :: OutputsInsufficientError -> TokenBundle
+outputsMissing (OutputsInsufficientError mint burn out) =
+  -- We use difference, which will show us the quantities in "mint"
+  -- that are not in "out + burn". Any amount present in "out + burn",
+  -- but not present in "mint" will simply be zeroed out, which is
+  -- fine for error-reporting purposes.
+  TokenBundle.fromTokenMap mint `TokenBundle.difference` (out `TokenBundle.add` TokenBundle.fromTokenMap burn)
 
 -- | Indicates that the balance of inputs actually selected was insufficient to
 --   cover the balance of 'outputsToCover'.
@@ -370,18 +409,28 @@ prepareOutputsWith minCoinValueFor = fmap $ \out ->
 -- Returns 'BalanceInsufficient' if the total balance of 'utxoAvailable' is not
 -- strictly greater than or equal to the total balance of 'outputsToCover'.
 --
+-- Returns 'OutputsInsufficientError' if the 'minted' values are not a
+-- subset of the 'outputsToCover' plus the 'burned' values. That is,
+-- the minted values are not spent or burned.
+--
 -- Provided that the total balance of 'utxoAvailable' is sufficient to cover
 -- the total balance of 'outputsToCover', this function guarantees to return
 -- an 'inputsSelected' value that satisfies:
 --
---    balance inputsSelected >= balance outputsToCover
---    balance inputsSelected == balance outputsToCover + balance changeGenerated
+--    ADA asset balance:
+--      balance inputsSelected + balance extraAdaSource
+--      > balance outputsToCover + balance changeGenerated
+--    non-ADA asset balance:
+--      balance inputsSelected + balance minted
+--      == balance outputsToCover
+--       + balance burned
+--       + balance changeGenerated
 --
 -- Finally, this function guarantees that:
 --
 --    inputsSelected ∪ utxoRemaining == utxoAvailable
 --    inputsSelected ∩ utxoRemaining == ∅
---    outputsCovered == outputsToCover
+--    outputsCovered + minted == outputsToCover + burned
 --
 performSelection
     :: forall m. (HasCallStack, MonadRandom m)
@@ -400,6 +449,10 @@ performSelection
         -- ^ The selection goal to satisfy.
     -> m (Either SelectionError (SelectionResult TokenBundle))
 performSelection minCoinFor costFor bundleSizeAssessor criteria
+    | not (TokenBundle.fromTokenMap mintInputs `leq` (requestedOutputs `TokenBundle.add` TokenBundle.fromTokenMap burnInputs)) =
+        pure $ Left $ OutputsInsufficient $ OutputsInsufficientError
+            { mintInputs, burnInputs, requestedOutputs }
+
     | not (balanceRequired `leq` balanceAvailable) =
         pure $ Left $ BalanceInsufficient $ BalanceInsufficientError
             { balanceAvailable, balanceRequired }
@@ -410,11 +463,14 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
 
     | otherwise = do
         state <- runSelection
-            selectionLimit extraCoinSource utxoAvailable balanceRequired
-        let balanceSelected = fullBalance (selected state) extraCoinSource
-        if balanceRequired `leq` balanceSelected then
-            makeChangeRepeatedly state
+            selectionLimit extraCoinSource utxoAvailable (Debug.trace ("balanceRequired: \n" <> (pretty $ TokenMap.Flat balanceRequired)) balanceRequired)
+        let
+          balanceSelected =
+              fullBalance (selected state) extraCoinSource
 
+        if balanceRequired `leq` (Debug.trace ("balanceSelected: \n" <> (pretty $ TokenMap.Flat balanceSelected)) balanceSelected)
+        then
+            makeChangeRepeatedly state
         else
             pure $ Left $ SelectionInsufficient $ SelectionInsufficientError
                 { inputsSelected = UTxOIndex.toList (selected state)
@@ -426,7 +482,11 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
         , utxoAvailable
         , selectionLimit
         , extraCoinSource
+        , mintInputs
+        , burnInputs
         } = criteria
+
+    requestedOutputs = F.foldMap (view #tokens) outputsToCover
 
     mkInputsSelected :: UTxOIndex -> NonEmpty (TxIn, TxOut)
     mkInputsSelected =
@@ -436,7 +496,12 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
     balanceAvailable = fullBalance utxoAvailable extraCoinSource
 
     balanceRequired :: TokenBundle
-    balanceRequired = F.foldMap (view #tokens) outputsToCover
+    balanceRequired =
+        requestedOutputs
+          `TokenBundle.add`
+            TokenBundle.fromTokenMap burnInputs
+          `TokenBundle.unsafeSubtract`
+            TokenBundle.fromTokenMap mintInputs
 
     insufficientMinCoinValues :: [InsufficientMinCoinValueError]
     insufficientMinCoinValues =
@@ -495,6 +560,8 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
             , extraCoinSource
             , inputBundles
             , outputBundles
+            , mintInputs
+            , burnInputs
             }
         )
       where
@@ -517,6 +584,9 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
     -- Eventually it returns just a final selection, or 'Nothing' if no more
     -- ada-only inputs are available.
     --
+    -- This function also takes a list of tokens that are to be
+    -- burned, and hence although an input will be consumed for them,
+    -- this function won't make an associated output for them.
     makeChangeRepeatedly
         :: SelectionState
         -> m (Either SelectionError (SelectionResult TokenBundle))
@@ -560,14 +630,24 @@ performSelection minCoinFor costFor bundleSizeAssessor criteria
                     pure $ Left $ UnableToConstructChange changeErr
       where
         mChangeGenerated :: Either UnableToConstructChangeError [TokenBundle]
-        mChangeGenerated = makeChange MakeChangeCriteria
-            { minCoinFor
-            , bundleSizeAssessor
-            , requiredCost
-            , extraCoinSource
-            , inputBundles =  view #tokens . snd <$> inputsSelected
-            , outputBundles = view #tokens <$> outputsToCover
-            }
+        mChangeGenerated =
+          let
+            mchange = makeChange MakeChangeCriteria
+              { minCoinFor
+              , bundleSizeAssessor
+              , requiredCost
+              , extraCoinSource
+              , inputBundles =
+                  let
+                    x = view #tokens . snd <$> inputsSelected
+                  in
+                    Debug.trace ("inputBundles: \n" <> (pretty $ TokenMap.Flat $ F.fold x)) x
+              , outputBundles = view #tokens <$> outputsToCover
+              , mintInputs
+              , burnInputs
+              }
+          in
+            Debug.trace ("mchange: \n" <> either show (pretty . TokenMap.Flat . F.fold) mchange) mchange
 
         mkSelectionResult :: [TokenBundle] -> SelectionResult TokenBundle
         mkSelectionResult changeGenerated = SelectionResult
@@ -942,6 +1022,10 @@ data MakeChangeCriteria minCoinFor bundleSizeAssessor = MakeChangeCriteria
         -- ^ Token bundles of selected inputs.
     , outputBundles :: NonEmpty TokenBundle
         -- ^ Token bundles of original outputs.
+    , mintInputs :: TokenMap
+        -- ^ Minted tokens provide an additional source of tokens.
+    , burnInputs :: TokenMap
+        -- ^ Burned tokens consume an input but produce no output.
     } deriving (Eq, Generic, Show)
 
 -- | Indicates 'True' if and only if a token bundle exceeds the maximum size
@@ -997,15 +1081,19 @@ makeChange criteria
         , extraCoinSource
         , inputBundles
         , outputBundles
+        , mintInputs
+        , burnInputs
         } = criteria
 
     -- The following subtraction is safe, as we have already checked
     -- that the total input value is greater than the total output
     -- value:
     excess :: TokenBundle
-    excess = totalInputValue `TokenBundle.unsafeSubtract` totalOutputValue
+    excess = (Debug.trace ("totalInputValue: \n" <> pretty (TokenMap.Flat totalInputValue)) totalInputValue)
+               `TokenBundle.unsafeSubtract`
+                 (Debug.trace ("totalOutputValue: \n" <> pretty (TokenMap.Flat totalOutputValue)) totalOutputValue)
 
-    (excessCoin, excessAssets) = TokenBundle.toFlatList excess
+    (excessCoin, excessAssets) = Debug.trace ("excess: " <> pretty (TokenMap.Flat excess)) (TokenBundle.toFlatList excess)
 
     -- Change maps for all assets, where each change map is paired with a
     -- corresponding coin from the original outputs.
@@ -1076,11 +1164,11 @@ makeChange criteria
     -- Change for user-specified assets: assets that were present in the
     -- original set of user-specified outputs ('outputsToCover').
     changeForUserSpecifiedAssets :: NonEmpty TokenMap
-    changeForUserSpecifiedAssets = F.foldr
-        (NE.zipWith (<>)
-            . makeChangeForUserSpecifiedAsset outputMaps)
-        (TokenMap.empty <$ outputMaps)
-        excessAssets
+    changeForUserSpecifiedAssets =
+      let
+        x = F.foldr (NE.zipWith (<>) . makeChangeForUserSpecifiedAsset outputMaps) (TokenMap.empty <$ outputMaps) excessAssets
+      in
+        Debug.trace (("changeForUser: \n" <>) . pretty . TokenMap.Flat . F.fold $ x) x
 
     -- Change for non-user-specified assets: assets that were not present
     -- in the original set of user-specified outputs ('outputsToCover').
@@ -1117,17 +1205,25 @@ makeChange criteria
     outputCoins = view #coin <$> outputBundles
 
     totalInputValue :: TokenBundle
-    totalInputValue = TokenBundle.add
-        (F.fold inputBundles)
-        (maybe TokenBundle.empty TokenBundle.fromCoin extraCoinSource)
+    totalInputValue =
+      F.fold inputBundles
+      `TokenBundle.add` F.foldMap TokenBundle.fromCoin extraCoinSource
+      -- Mint inputs represent extra inputs from "the void"
+      `TokenBundle.add` TokenBundle.fromTokenMap mintInputs
 
     totalOutputValue :: TokenBundle
     totalOutputValue = F.fold outputBundles
+      -- Burn inputs represent extra outputs to "the void"
+      `TokenBundle.add` TokenBundle.fromTokenMap burnInputs
 
     -- Identifiers of all user-specified assets: assets that were included in
     -- the original set of outputs.
     userSpecifiedAssetIds :: Set AssetId
-    userSpecifiedAssetIds = TokenBundle.getAssets totalOutputValue
+    userSpecifiedAssetIds =
+      let
+        x = TokenBundle.getAssets (F.fold outputBundles)
+      in
+        Debug.trace ( "userSpecifiedAssetIds: \n" <> (foldMap (\(TokenMap.AssetId pol name) -> pretty pol <> " " <> pretty name <> "\n") $ Set.toList x)) x
 
     -- Identifiers and quantities of all non-user-specified assets: assets that
     -- were not included in the orginal set of outputs, but that were
@@ -1477,17 +1573,16 @@ assetQuantity asset =
     unTokenQuantity . flip TokenBundle.getQuantity asset . view #balance
 
 coinQuantity :: UTxOIndex -> Maybe Coin -> Natural
-coinQuantity index =
-    fromIntegral . unCoin . TokenBundle.getCoin . fullBalance index
+coinQuantity index extraSource =
+    fromIntegral . unCoin . TokenBundle.getCoin $ fullBalance index extraSource
 
 fullBalance :: UTxOIndex -> Maybe Coin -> TokenBundle
 fullBalance index extraSource
     | UTxOIndex.null index =
         TokenBundle.empty
     | otherwise =
-        TokenBundle.add
-            (view #balance index)
-            (maybe TokenBundle.empty TokenBundle.fromCoin extraSource)
+        (view #balance index)
+          `TokenBundle.add` (maybe TokenBundle.empty TokenBundle.fromCoin extraSource)
 
 --------------------------------------------------------------------------------
 -- Utility types

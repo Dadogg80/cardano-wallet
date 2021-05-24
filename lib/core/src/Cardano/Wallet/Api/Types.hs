@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -65,10 +66,14 @@ module Cardano.Wallet.Api.Types
     , ApiSelectCoinsPayments (..)
     , ApiSelectCoinsAction (..)
     , ApiCoinSelection (..)
+    , ApiMintBurnOperation (..)
+    , ApiMintData(..)
+    , ApiBurnData(..)
     , ApiCoinSelectionChange (..)
     , ApiCoinSelectionInput (..)
     , ApiCoinSelectionOutput (..)
     , ApiCoinSelectionWithdrawal (..)
+    , ApiMintBurnData (..)
     , ApiRawMetadata (..)
     , ApiStakePool (..)
     , ApiStakePoolMetrics (..)
@@ -139,6 +144,7 @@ module Cardano.Wallet.Api.Types
     , ApiAccountKeyShared (..)
     , KeyFormat (..)
     , ApiPostAccountKeyData (..)
+    , MintTokenData(..)
 
     -- * API Types (Byron)
     , ApiByronWallet (..)
@@ -188,6 +194,7 @@ module Cardano.Wallet.Api.Types
     , PostTransactionFeeDataT
     , ApiWalletMigrationPlanPostDataT
     , ApiWalletMigrationPostDataT
+    , MintTokenDataT
 
     -- * API Type Conversions
     , coinToQuantity
@@ -1279,6 +1286,7 @@ data ApiErrorCode
     | SharedWalletNoSuchCosigner
     | SharedWalletCannotUpdateKey
     | SharedWalletScriptTemplateInvalid
+    | MintedNotSpent
     deriving (Eq, Generic, Show, Data, Typeable)
     deriving anyclass NFData
 
@@ -2983,6 +2991,7 @@ type family ApiCoinSelectionT (n :: k) :: Type
 type family ApiSelectCoinsDataT (n :: k) :: Type
 type family ApiTransactionT (n :: k) :: Type
 type family PostTransactionDataT (n :: k) :: Type
+type family MintTokenDataT (n :: k) :: Type
 type family PostTransactionFeeDataT (n :: k) :: Type
 type family ApiWalletMigrationPlanPostDataT (n :: k) :: Type
 type family ApiWalletMigrationPostDataT (n :: k1) (s :: k2) :: Type
@@ -3011,6 +3020,9 @@ type instance ApiTransactionT (n :: NetworkDiscriminant) =
 
 type instance PostTransactionDataT (n :: NetworkDiscriminant) =
     PostTransactionData n
+
+type instance MintTokenDataT (n :: NetworkDiscriminant) =
+  MintTokenData n
 
 type instance PostTransactionFeeDataT (n :: NetworkDiscriminant) =
     PostTransactionFeeData n
@@ -3063,3 +3075,82 @@ instance FromJSON (ApiT SmashServer) where
     parseJSON = fromTextJSON "SmashServer"
 instance ToJSON (ApiT SmashServer) where
     toJSON = toTextJSON
+
+{-------------------------------------------------------------------------------
+                         Token minting types
+-------------------------------------------------------------------------------}
+
+data MintTokenData (n :: NetworkDiscriminant) = MintTokenData
+    { mintBurn :: !(ApiMintBurnData n)
+    , passphrase :: !(ApiT (Passphrase "lenient"))
+    , metadata :: !(Maybe (ApiT TxMetadata))
+    , timeToLive :: !(Maybe (Quantity "second" NominalDiffTime))
+    } deriving (Eq, Generic, Show)
+
+instance DecodeAddress n => FromJSON (MintTokenData n) where
+    parseJSON = genericParseJSON defaultRecordTypeOptions
+
+instance EncodeAddress n => ToJSON (MintTokenData n) where
+    toJSON = genericToJSON defaultRecordTypeOptions
+
+data ApiMintBurnData (n :: NetworkDiscriminant) = ApiMintBurnData
+  { monetaryPolicyIndex :: !(Maybe (ApiT DerivationIndex))
+  , tokenName           :: !(ApiT W.TokenName)
+  , operation           :: !(ApiMintBurnOperation n)
+  } deriving (Eq, Generic, Show)
+
+instance DecodeAddress n => FromJSON (ApiMintBurnData n) where
+    parseJSON = genericParseJSON defaultRecordTypeOptions
+
+instance EncodeAddress n => ToJSON (ApiMintBurnData n) where
+    toJSON = genericToJSON defaultRecordTypeOptions
+
+data ApiMintBurnOperation (n :: NetworkDiscriminant)
+    = ApiMint (ApiMintData n)
+    | ApiBurn ApiBurnData
+    | ApiMintAndBurn (ApiMintData n) ApiBurnData
+    deriving (Eq, Generic, Show)
+
+newtype ApiMintData n = ApiMintData
+    { mint :: [((ApiT Address, Proxy n), Quantity "assets" Natural)]
+    }
+    deriving (Eq, Generic, Show)
+
+instance DecodeAddress n => FromJSON (ApiMintData n) where
+    parseJSON = fmap ApiMintData . genericParseJSON defaultRecordTypeOptions
+
+instance EncodeAddress n => ToJSON (ApiMintData n) where
+    toJSON (ApiMintData mint) = genericToJSON defaultRecordTypeOptions mint
+
+newtype ApiBurnData = ApiBurnData
+    { burn :: Quantity "assets" Natural
+    }
+    deriving (Eq, Generic, Show)
+
+instance FromJSON ApiBurnData where
+    parseJSON = fmap ApiBurnData . genericParseJSON defaultRecordTypeOptions
+
+instance ToJSON ApiBurnData where
+    toJSON (ApiBurnData burn) = genericToJSON defaultRecordTypeOptions burn
+
+instance EncodeAddress n => ToJSON (ApiMintBurnOperation n) where
+    toJSON = \case
+        ApiMint mints ->
+            Aeson.Object $ HM.singleton "mint" (toJSON mints)
+        ApiBurn burn  ->
+            Aeson.Object $ HM.singleton "burn" (toJSON burn)
+        ApiMintAndBurn mints burn ->
+            Aeson.Object $ HM.fromList
+                [ ("mint", toJSON mints)
+                , ("burn", toJSON burn)
+                ]
+
+instance DecodeAddress n => FromJSON (ApiMintBurnOperation n) where
+    parseJSON = Aeson.withObject "ApiMintBurnOperation" $ \o -> do
+        mMints <- o .:? "mint" 
+        mBurn  <- o .:? "burn" 
+        case (mMints, mBurn) of
+            (Nothing    , Nothing)   -> fail "Must include a mint or burn operation"
+            (Just mints , Nothing)   -> pure $ ApiMint mints
+            (Nothing    , Just burn) -> pure $ ApiBurn burn 
+            (Just mints , Just burn) -> pure $ ApiMintAndBurn mints burn

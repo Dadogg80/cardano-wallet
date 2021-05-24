@@ -68,6 +68,7 @@ import Cardano.Wallet.Api.Types
     , ApiWalletPassphrase
     , ApiWalletSignData
     , ByronWalletPutPassphraseData
+    , MintTokenData
     , PostExternalTransactionData
     , PostTransactionData
     , PostTransactionFeeData
@@ -1760,3 +1761,42 @@ putAddressesDataCases =
       , "Error in $: parsing Cardano.Wallet.Api.Types.ApiPutAddressesData(ApiPutAddressesData) failed, key 'addresses' not found"
       )
     ]
+
+instance Malformed (BodyParam (MintTokenData ('Testnet pm))) where
+    malformed = jsonValid ++ jsonInvalid
+     where
+         jsonInvalid = first BodyParam <$>
+            [ ("1020344", "Error in $: parsing Cardano.Wallet.Api.Types.PostTransactionData(PostTransactionData) failed, expected Object, but encountered Number")
+            , ("\"1020344\"", "Error in $: parsing Cardano.Wallet.Api.Types.PostTransactionData(PostTransactionData) failed, expected Object, but encountered String")
+            , ("{\"payments : [], \"random\"}", msgJsonInvalid)
+            ]
+         jsonValid = first (BodyParam . Aeson.encode) <$> paymentCases ++
+            [ -- passphrase
+              ( [aesonQQ|
+                { "payments": [
+                    {
+                        "address": #{addrPlaceholder},
+                        "amount": {
+                            "quantity": 42000000,
+                            "unit": "lovelace"
+                        }
+                    }
+                   ]
+                }|]
+              , "Error in $: parsing Cardano.Wallet.Api.Types.PostTransactionData(PostTransactionData) failed, key 'passphrase' not found"
+              )
+            , ( [aesonQQ|
+               { "payments": [
+                   {
+                       "address": #{addrPlaceholder},
+                       "amount": {
+                           "quantity": 42000000,
+                           "unit": "lovelace"
+                       }
+                   }
+                  ],
+                  "passphrase": #{nameTooLong}
+               }|]
+               , "Error in $.passphrase: passphrase is too long: expected at most 255 characters"
+              )
+            ]
