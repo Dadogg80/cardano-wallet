@@ -516,7 +516,7 @@ instance
     type MkHeaderRequest (Verb m s (ct ': cts) a) = Header "Accept" ct -> [Request]
     gEveryHeader _ req (Header h) =
         [req { requestMethod = reflectMethod $ Proxy @m
-             , requestHeaders = requestHeaders req ++ [ (hAccept, h) ]
+             -- , requestHeaders = requestHeaders req ++ [ (hAccept, h) ]
              }]
 
 
