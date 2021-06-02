@@ -274,7 +274,7 @@ import Cardano.Wallet.Compat
 import Cardano.Wallet.DB
     ( DBFactory (..) )
 import Cardano.Wallet.Network
-    ( NetworkLayer, getAccountBalance, timeInterpreter )
+    ( NetworkLayer, fetchAccountBalances, timeInterpreter )
 import Cardano.Wallet.Primitive.AddressDerivation
     ( DelegationAddress (..)
     , Depth (..)
@@ -2083,7 +2083,7 @@ listStakeKeys'
         -- ^ The wallet's UTxO
     -> (Address -> Maybe RewardAccount)
         -- ^ Lookup the `RewardAccount` of an `Address`.
-    -> (Set RewardAccount -> m (Map RewardAccount (Maybe Coin)))
+    -> (Set RewardAccount -> m (Map RewardAccount Coin))
         -- ^ A way to fetch the rewards of any set of `RewardAccount`s.
         --
         -- This allows:
@@ -2107,13 +2107,12 @@ listStakeKeys' utxo lookupStakeRef fetchRewards ourKeysWithInfo = do
         let allKeys = ourKeys <> stakeKeysInUTxO
 
         -- If we wanted to know whether a stake key is registered or not, we
-        -- could look at the difference between @Nothing@ and
-        -- @Just (Coin 0)@ from the response here, instead of hiding the
-        -- difference.
+        -- could expose the difference between `Nothing` and `Just 0` in the
+        -- `NetworkLayer` interface.
         rewardsMap <- fetchRewards $ Set.fromList allKeys
 
         let rewards acc = fromMaybe (Coin 0) $
-                join $ Map.lookup acc rewardsMap
+                Map.lookup acc rewardsMap
 
         let mkOurs (acc, ix, deleg) = ApiOurStakeKey
                 { _index = ix
@@ -2173,27 +2172,14 @@ listStakeKeys lookupStakeRef ctx (ApiT wid) = do
                     Just acc -> [(acc, 0, ourApiDelegation)]
                     Nothing -> []
 
-            -- This uses `getAccountBalance` under the hood. This should give us
-            -- automatic batching of requests, but at the expense of some
-            -- results potentially being zero until listing stake keys once
-            -- more.
-            --
-            -- We could replace this with with a direct batch-fetch function
-            -- if this turns out to be a problem.
-            let fetchRewards = flip lookupUsing rewardsOfAccount . Set.toList
-
-            liftIO $ listStakeKeys' @n utxo lookupStakeRef fetchRewards ourKeys
-
+            liftIO $ listStakeKeys' @n
+                utxo
+                lookupStakeRef
+                (fetchAccountBalances nl)
+                ourKeys
   where
-    -- | Construct a map from repeatedly calling a monadic lookup function.
-    lookupUsing
-        :: (Traversable t, Monad m, Ord a) => t a -> (a -> m b) -> m (Map a b)
-    lookupUsing xs f =
-        Map.fromList . F.toList <$> forM xs (\x -> f x >>= \x' -> pure (x,x') )
+    nl = ctx ^. networkLayer
 
-    rewardsOfAccount :: forall m. MonadIO m => RewardAccount -> m (Maybe Coin)
-    rewardsOfAccount acc = fmap eitherToMaybe <$> liftIO . runExceptT $
-        getAccountBalance (ctx ^. networkLayer) acc
 
 {-------------------------------------------------------------------------------
                                 Migrations

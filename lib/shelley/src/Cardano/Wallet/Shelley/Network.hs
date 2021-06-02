@@ -355,8 +355,10 @@ withNetworkLayerBase tr np conn (versionData, _) tol action = do
             _postTx localTxSubmissionQ era sealed
         , stakeDistribution =
             _stakeDistribution queryRewardQ
-        , getAccountBalance =
+        , getCachedAccountBalance =
             _getAccountBalance rewardsObserver
+        , fetchAccountBalances =
+            fetchRewardAccounts tr queryRewardQ
         , timeInterpreter =
             _timeInterpreter (contramap MsgInterpreterLog tr) interpreterVar
         , syncProgress = _syncProgress interpreterVar
@@ -545,7 +547,7 @@ withNetworkLayerBase tr np conn (versionData, _) tol action = do
 
     -- TODO(#2042): Make wallets call manually, with matching
     -- stopObserving.
-    _getAccountBalance rewardsObserver k = liftIO $ do
+    _getAccountBalance rewardsObserver k = do
         startObserving rewardsObserver k
         fromMaybe (W.Coin 0) <$> query rewardsObserver k
 
