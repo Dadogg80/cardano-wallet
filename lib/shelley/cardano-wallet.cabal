@@ -207,9 +207,10 @@ test-suite unit
     , cardano-addresses
     , cardano-api
     , cardano-crypto-class
+    , cardano-ledger-core
+    , cardano-wallet
     , cardano-wallet-core
     , cardano-wallet-test-utils
-    , cardano-wallet
     , containers
     , contra-tracer
     , fmt
