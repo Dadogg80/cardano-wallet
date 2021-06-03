@@ -109,9 +109,7 @@ import Cardano.Wallet.Primitive.Types.Tx
     , txSizeDistance
     )
 import Cardano.Wallet.Shelley.Compatibility
-    ( AllegraEra
-    , ShelleyEra
-    , fromAllegraTx
+    ( fromAllegraTx
     , fromMaryTx
     , fromShelleyTx
     , maxTokenBundleSerializedLengthBytes
