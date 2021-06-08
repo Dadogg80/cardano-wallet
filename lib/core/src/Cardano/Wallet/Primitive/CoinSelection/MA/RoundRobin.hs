@@ -1161,6 +1161,85 @@ makeChange criteria
                 $ assessTokenBundleSize bundleSizeAssessor
                 . flip TokenBundle.setCoin (maxBound @Coin)
 
+    -- @changeMapOutputCoinPairs@ requires that the
+    -- @changeForNonUserSpecifiedAssets@ has a number of properties:
+    --   1. It's the same length as changeForUserSpecifiedAssets
+    --   2. It's partially-ordered in ascending order
+    --
+    -- @collateNonUserSpecifiedAssetQuantities@ ensures that the
+    -- @changeForNonuserSpecifiedAssets@ list has these properties.
+    --
+    -- For example, given the following "non-user-specified asset
+    -- quantities":
+    --     [ ("A", [4, 1, 3, 2])
+    --     , ("B", [9, 1, 8, 2, 7, 3, 6, 4, 5])
+    --     ]
+    --
+    -- If the user requests 5 outputs in their transaction,
+    -- @changeForNonUserSpecifiedAssets@ will generate:
+    --
+    -- [ [          ("B", 7)  ]
+    -- [ [("A", 1), ("B", 8)  ]
+    -- [ [("A", 2), ("B", 9)  ]
+    -- [ [("A", 3), ("B", 9)  ]
+    -- [ [("A", 4), ("B", 12) ]
+    --
+    -- i.e. it generates change bundles that satisfy our desired
+    -- properties:
+    --
+    --   1. The number of change bundles matches the number of outputs
+    --      the user originally requested
+    --   2. Those changes are split in such a way to maximize the
+    --      number of large change bundles
+    --
+    -- You can see that when there aren't enough input bundles to fit
+    -- an input in each change bundle, we pad a change bundle with
+    -- zero.
+    --
+    -- Additionally, the change function maintains the property that
+    -- the change bundles are partially ordered in ascending order,
+    -- you can see that each successive change bundle is a subset of
+    -- the last. This property is used by @changeMapOutputCoinPairs@
+    -- so it's important it's maintained.
+    --
+    -- However, now we want to mint and burn tokens. These are
+    -- considered "non-user specified outputs" because they aren't
+    -- specified in the "outputs to cover". Minted tokens add to the
+    -- amount of change we need to give and burnt tokens remove from
+    -- the amount of change we need to give.
+    --
+    -- The following two functions work by modifying the
+    -- @changeForNonUserSpecifiedAssets@ result to add mint tokens to
+    -- the largest change bundle:
+    --
+    -- [ [          ("B", 7)  ]
+    -- [ [("A", 1), ("B", 8)  ]
+    -- [ [("A", 2), ("B", 9)  ]
+    -- [ [("A", 3), ("B", 9)  ]
+    -- [ [("A", 4), ("B", 12) ] <-- add mint tokens here
+    --
+    -- This solution maintains the properties we want to maintain,
+    -- namely:
+    --   1. The number of change bundles matches the number of
+    --      "outputs to cover".
+    --   2. The change bundles are partially ordered in ascending
+    --      order.
+    --   3. The change bundles are split in such a way to maximize the
+    --      number of large change bundles
+    --
+    -- And to remove burnt tokens from the smallest change bundles
+    -- until all required burnt tokens are removed:
+    --
+    -- [ [          ("B", 7)  ] <-- start removing burnt tokens here
+    -- [ [("A", 1), ("B", 8)  ]  <-- if need to burn more, remove from her
+    -- [ [("A", 2), ("B", 9)  ]
+    -- [ [("A", 3), ("B", 9)  ]
+    -- [ [("A", 4), ("B", 12) ]
+    --
+    -- In the case that an entry is burnt completely, we just leave it
+    -- as an empty entry. Again, this maintains all three important
+    -- properties.
+
     -- Change for user-specified assets: assets that were present in the
     -- original set of user-specified outputs ('outputsToCover').
     changeForUserSpecifiedAssets :: NonEmpty TokenMap
