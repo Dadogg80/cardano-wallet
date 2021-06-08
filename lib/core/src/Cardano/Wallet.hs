@@ -173,7 +173,6 @@ module Cardano.Wallet
     , getAccountPublicKeyAtIndex
     , readAccountPublicKey
     , deriveScriptSigningCreds
-    , readPublicAccountKey
     , signMetadataWith
     , ErrWithRootKey (..)
     , ErrWrongPassphrase (..)
@@ -184,7 +183,6 @@ module Cardano.Wallet
 
     -- * Utilities
     , throttle
-    , guardHardIndex
 
     -- * Logging
     , WalletWorkerLog (..)
