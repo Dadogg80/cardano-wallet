@@ -52,6 +52,8 @@ import Cardano.Wallet.Api
 import Cardano.Wallet.Api.Types
     ( AccountPostData (..)
     , AddressAmount (..)
+    , ApiMintData(..)
+    , ApiBurnData(..)
     , AnyAddress (..)
     , ApiAccountKey (..)
     , ApiAccountKeyShared (..)
@@ -344,6 +346,7 @@ import Test.QuickCheck
     , InfiniteList (..)
     , applyArbitrary2
     , applyArbitrary3
+    , applyArbitrary4
     , arbitraryBoundedEnum
     , arbitraryPrintableChar
     , arbitrarySizedBoundedIntegral
@@ -1886,11 +1889,17 @@ instance Arbitrary (ApiMintBurnData t) where
         <*> (ApiT <$> genTokenNameSmallRange)
         <*> arbitrary
 
+instance Arbitrary (ApiMintData t) where
+    arbitrary = ApiMintData <$> arbitrary
+
+instance Arbitrary ApiBurnData where
+    arbitrary = ApiBurnData <$> arbitrary
+
 instance Arbitrary (ApiMintBurnOperation t) where
     arbitrary
         = oneof [ ApiMint <$> arbitrary
                 , ApiBurn <$> arbitrary
-                , ApiMintBurn <$> arbitrary <*> arbitrary
+                , ApiMintAndBurn <$> arbitrary <*> arbitrary
                 ]
 
 instance Arbitrary (Quantity "assets" Natural) where

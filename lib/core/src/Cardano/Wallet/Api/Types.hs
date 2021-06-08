@@ -3111,7 +3111,7 @@ data ApiMintBurnOperation (n :: NetworkDiscriminant)
     | ApiMintAndBurn (ApiMintData n) ApiBurnData
     deriving (Eq, Generic, Show)
 
-newtype ApiMintData n = ApiMintData
+newtype ApiMintData (n :: NetworkDiscriminant) = ApiMintData
     { mint :: [((ApiT Address, Proxy n), Quantity "assets" Natural)]
     }
     deriving (Eq, Generic, Show)
