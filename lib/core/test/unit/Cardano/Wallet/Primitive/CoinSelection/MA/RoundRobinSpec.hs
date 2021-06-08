@@ -1275,9 +1275,9 @@ encodeBoundaryTestCriteria c = SelectionCriteria
     , extraCoinSource =
         Nothing
     , mintInputs =
-        mempty
+        TokenMap.empty
     , burnInputs =
-        mempty
+        TokenMap.empty
     }
   where
     dummyAddresses :: [Address]
@@ -1777,8 +1777,8 @@ prop_makeChange_identity bundles = (===)
         , bundleSizeAssessor = mkBundleSizeAssessor NoBundleSizeLimit
         , inputBundles = bundles
         , outputBundles = bundles
-        , mintInputs = mempty
-        , burnInputs = mempty
+        , mintInputs = TokenMap.empty
+        , burnInputs = TokenMap.empty
         }
 
 -- | Tests that 'makeChange' generates the correct number of change bundles.
@@ -2040,8 +2040,8 @@ unit_makeChange =
               , bundleSizeAssessor
               , inputBundles = i
               , outputBundles = o
-              , mintInputs = mempty
-              , burnInputs = mempty
+              , mintInputs = TokenMap.empty
+              , burnInputs = TokenMap.empty
               }
     ]
   where

@@ -15,6 +15,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE LambdaCase #-}
 
 -- |
 -- Copyright: © 2020 IOHK
@@ -1106,14 +1107,13 @@ estimateTxSize skeleton =
     --      ; Timelock validity intervals are half-open intervals [a, b).
     --      ; This field specifies the right (excluded) endpoint b.
     --   ]
-    sizeOf_NativeScript script =
-      case script of
-        (RequireSignatureOf _) -> sizeOf_SmallUInt + sizeOf_Hash28
-        (RequireAllOf ss)      -> sizeOf_SmallUInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
-        (RequireAnyOf ss)      -> sizeOf_SmallUInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
-        (RequireSomeOf _ ss)   -> sizeOf_SmallUInt + sizeOf_UInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
-        (ActiveFromSlot _)     -> sizeOf_SmallUInt + sizeOf_UInt
-        (ActiveUntilSlot _)    -> sizeOf_SmallUInt + sizeOf_UInt
+    sizeOf_NativeScript = \case
+        RequireSignatureOf _ -> sizeOf_SmallUInt + sizeOf_Hash28
+        RequireAllOf ss      -> sizeOf_SmallUInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
+        RequireAnyOf ss      -> sizeOf_SmallUInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
+        RequireSomeOf _ ss   -> sizeOf_SmallUInt + sizeOf_UInt + sizeOf_Array + sumVia sizeOf_NativeScript ss
+        ActiveFromSlot _     -> sizeOf_SmallUInt + sizeOf_UInt
+        ActiveUntilSlot _    -> sizeOf_SmallUInt + sizeOf_UInt
 
     -- A Blake2b-224 hash, resulting in a 28-byte digest wrapped in CBOR, so
     -- with 2 bytes overhead (length <255, but length > 23)
